@@ -4,11 +4,13 @@
 
 #include <stdio.h>
 
+#include <string.h>
+
 #include "../vincent.h"
 size_t vincent_data_length = sizeof(vincent_data) / sizeof(*vincent_data);
 
-void
-print_info(uint8_t ch) {
+static void
+_print_charinfo(uint8_t ch) {
 	/* the Vincent font is glyphs 0x01-0x7F of CP437 */
 	if (ch > 0x7F) {
 		printf("WAT");
@@ -117,37 +119,19 @@ print_info(uint8_t ch) {
 	}
 }
 
-void
-print_horiz(int xbm) {
-	printf(
-		"#define vh_width 8" "\n"
-		"#define vh_height 1024" "\n"
-		"static unsigned char vh_bits[] = {" "\n"
-	);
-
+static void
+_print_horiz(int lsbispx0) {
 	for (size_t i=0; i<vincent_data_length; i++) {
 		printf("\t" "/* 0x%02zX -- ", i);
-		print_info(i);
+		_print_charinfo(i);
 		printf(" */" "\n");
 
 		printf("\t");
 
-		uint8_t * row = vincent_data + i;
+		uint8_t * row = (uint8_t *)vincent_data + i;
 		uint8_t   out[8];
 		for (size_t j=0; j<8; j++) {
-			if (xbm) {
-				out[j] = 
-					(((row[0]>>(7-j))&1) << 7) |
-					(((row[1]>>(7-j))&1) << 6) |
-					(((row[2]>>(7-j))&1) << 5) |
-					(((row[3]>>(7-j))&1) << 4) |
-					(((row[4]>>(7-j))&1) << 3) |
-					(((row[5]>>(7-j))&1) << 2) |
-					(((row[6]>>(7-j))&1) << 1) |
-					(((row[7]>>(7-j))&1) << 0)
-				;
-			}
-			else {  /* ST7565 */
+			if (lsbispx0) {
 				out[j] = 
 					(((row[7]>>(7-j))&1) << 7) |
 					(((row[6]>>(7-j))&1) << 6) |
@@ -159,6 +143,18 @@ print_horiz(int xbm) {
 					(((row[0]>>(7-j))&1) << 0)
 				;
 			}
+			else {
+				out[j] = 
+					(((row[0]>>(7-j))&1) << 7) |
+					(((row[1]>>(7-j))&1) << 6) |
+					(((row[2]>>(7-j))&1) << 5) |
+					(((row[3]>>(7-j))&1) << 4) |
+					(((row[4]>>(7-j))&1) << 3) |
+					(((row[5]>>(7-j))&1) << 2) |
+					(((row[6]>>(7-j))&1) << 1) |
+					(((row[7]>>(7-j))&1) << 0)
+				;
+			}
 		}
 		for (size_t j=0; j<8; j++) {
 			printf("0x%02X, ", out[j]);
@@ -166,21 +162,59 @@ print_horiz(int xbm) {
 
 		printf("\n");
 	}
+}
+
+void
+print_xbm_horiz(void) {
+	printf(
+		"#define vh_width 8" "\n"
+		"#define vh_height 1024" "\n"
+		"static unsigned char vh_bits[] = {" "\n"
+	);
+
+	_print_horiz(0);  /* MSB is pixel 0 */
 
 	printf("};" "\n");
 }
 
 void
+print_st7565(void) {
+	printf(
+		"/* 2010 Quinn Evans, 2020 David DiPaola. Licensed under CC0 (public domain, see https://creativecommons.org/publicdomain/zero/1.0/). */" "\n"
+		"\n"
+		"#ifndef __VINCENT_ST7565_H" "\n"
+		"#define __VINCENT_ST7565_H" "\n"
+		"\n"
+		"static unsigned char vincent_st7565[] = {" "\n"
+	);
+
+	_print_horiz(1);  /* LSB is pixel 0 */
+
+	printf(
+		"};" "\n"
+		"#define vincent_st7565_length (sizeof(vincent_st7565) / sizeof(*vincent_st7565))" "\n"
+		"\n"
+		"#endif" "\n"
+	);
+}
+
+void
 print_gb(void) {
+	printf(
+		"/* 2010 Quinn Evans, 2020 David DiPaola. Licensed under CC0 (public domain, see https://creativecommons.org/publicdomain/zero/1.0/). */" "\n"
+		"\n"
+		"VINCENT:" "\n"
+	);
+
 	for (size_t i=0; i<vincent_data_length; i++) {
 		printf("\t" "/* 0x%02zX -- ", i);
-		print_info(i);
+		_print_charinfo(i);
 		printf(" */" "\n");
 
-		uint8_t * glyph = vincent_data + i;
+		uint8_t * glyph = (uint8_t *)vincent_data + i;
 		for (size_t row=0; row<8; row++) {
 			for (size_t j=0; j<2; j++) {  /* GameBoy tile format is 2bpp */
-				printf("\t" "%%");
+				printf("\t" ".DB %%");
 				for (ssize_t px=7; px>=0; px--) {
 					printf("%i", (glyph[row]>>px)&1);
 				}
@@ -191,8 +225,40 @@ print_gb(void) {
 }
 
 int
-main() {
-	//print_horiz(0);
-	print_gb();
+main(int argc, char * * argv) {
+	struct mode_entry {
+		const char * name;
+		void (*fn)(void);
+	};
+	const struct mode_entry modes[] = {
+		{ .name="xbm_horiz", .fn=&print_xbm_horiz },
+		{ .name="st7565",    .fn=&print_st7565    },
+		{ .name="gb",        .fn=&print_gb        },
+	};
+	const size_t modes_length = sizeof(modes) / sizeof(*modes);
+
+	void (*fn)(void) = NULL;
+	if (argc >= 2) {
+		const char * argv_mode = argv[1];
+		for (size_t i=0; i<modes_length; i++) {
+			if (strcmp(argv_mode, modes[i].name) == 0) {
+				fn = modes[i].fn;
+				break;
+			}
+		}
+	}
+	if (!fn) {
+		fprintf(stderr, "syntax: %s <mode>" "\n", argv[0]);
+		fprintf(stderr, "where <mode> is:" "\n");
+		for (size_t i=0; i<modes_length; i++) {
+			fprintf(stderr, "\t" "%s" "\n", modes[i].name);
+		}
+
+		return 1;
+	}
+
+	fn();
+	
+	return 0;
 }
 
